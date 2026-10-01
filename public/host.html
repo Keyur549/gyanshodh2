@@ -117,59 +117,92 @@ function speakQuestion(text, force){
 setInterval(()=>{ if('speechSynthesis' in window && window.speechSynthesis.paused) window.speechSynthesis.resume(); },4000);
 
 let wheelRotation=0, spinning=false, lastWheelIdx=null;
-function wheelSVG(total, usedIdx, rotation){
-  const R=150,C=160,seg=360/total;
+let pendingReveal=null;   // number (1-based) that just landed but stays visible until the NEXT spin starts
+let wheelLayout=null;     // frozen list of currently-shown numbers (shrinks by 1 each spin)
+function computeLayout(r){
+  const total=r.questions.length;
+  const used=new Set(r.usedIdx);
+  if(pendingReveal!=null) used.delete(pendingReveal-1);
+  const nums=[]; for(let i=1;i<=total;i++) if(!used.has(i-1)) nums.push(i);
+  return nums;
+}
+function wheelSVG(numbers, rotation, highlightNumber){
+  const total=Math.max(numbers.length,1), R=108,C=118,seg=360/total;
   const colors=['#7c3aed','#f59e0b','#16a34a','#0ea5e9','#e11d48','#9333ea'];
   let paths='';
-  for(let i=0;i<total;i++){
-    const used=usedIdx.includes(i);
+  numbers.forEach((num,i)=>{
     const a0=i*seg-90, a1=a0+seg;
     const x1=C+R*Math.cos(a0*Math.PI/180), y1=C+R*Math.sin(a0*Math.PI/180);
     const x2=C+R*Math.cos(a1*Math.PI/180), y2=C+R*Math.sin(a1*Math.PI/180);
     const large=seg>180?1:0;
-    const fill=used?'#2a2840':colors[i%colors.length];
-    paths+=`<path d="M${C},${C} L${x1.toFixed(1)},${y1.toFixed(1)} A${R},${R} 0 ${large} 1 ${x2.toFixed(1)},${y2.toFixed(1)} Z" fill="${fill}" stroke="#1f1d2e" stroke-width="1" opacity="${used?0.3:1}"/>`;
-    if(!used){
-      const mid=(a0+a1)/2, lx=C+(R*0.72)*Math.cos(mid*Math.PI/180), ly=C+(R*0.72)*Math.sin(mid*Math.PI/180);
-      paths+=`<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" fill="#fff" font-size="12" font-weight="700" text-anchor="middle" dominant-baseline="middle">${i+1}</text>`;
-    }
-  }
-  return `<div style="position:relative;width:320px;margin:8px auto;">
-  <div style="position:absolute;top:-6px;left:50%;transform:translateX(-50%);font-size:26px;z-index:2;">🔻</div>
-  <svg id="wheelSvg" viewBox="0 0 ${2*C} ${2*C}" width="320" height="320" style="transform:rotate(${rotation}deg);will-change:transform;"><g>${paths}</g><circle cx="${C}" cy="${C}" r="26" fill="#1f1d2e" stroke="#fff" stroke-width="2"/></svg>
-  </div>`;
+    const fill=colors[(num-1)%colors.length];
+    const ring=num===highlightNumber?'stroke="#ffd700" stroke-width="3"':'stroke="#1f1d2e" stroke-width="1"';
+    paths+=`<path d="M${C},${C} L${x1.toFixed(1)},${y1.toFixed(1)} A${R},${R} 0 ${large} 1 ${x2.toFixed(1)},${y2.toFixed(1)} Z" fill="${fill}" ${ring}/>`;
+    const mid=(a0+a1)/2, lx=C+(R*0.7)*Math.cos(mid*Math.PI/180), ly=C+(R*0.7)*Math.sin(mid*Math.PI/180);
+    paths+=`<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" fill="#fff" font-size="${total>24?9:11}" font-weight="700" text-anchor="middle" dominant-baseline="middle">${num}</text>`;
+  });
+  return `<div style="position:relative;width:236px;margin:6px auto;">
+  <div style="position:absolute;top:-4px;left:50%;transform:translateX(-50%);font-size:20px;z-index:2;">🔻</div>
+  <svg id="wheelSvg" viewBox="0 0 ${2*C} ${2*C}" width="236" height="236" style="transform:rotate(${rotation}deg);will-change:transform;"><g>${paths}</g><circle cx="${C}" cy="${C}" r="19" fill="#1f1d2e" stroke="#fff" stroke-width="2"/></svg>
+  </div><div class="muted" style="margin-top:2px">${numbers.length} બાકી</div>`;
 }
-function computeTargetRotation(idx,total){
+function computeTargetRotation(pos,total){
   const seg=360/total;
-  const targetMod=(((-(idx+0.5)*seg)%360)+360)%360;
+  const targetMod=(((-(pos+0.5)*seg)%360)+360)%360;
   const currentMod=((wheelRotation%360)+360)%360;
   let delta=targetMod-currentMod; if(delta<0) delta+=360;
   return wheelRotation+delta+5*360;
 }
-function finishSpin(idx,questionText,target){
+let tickAudioCtx=null;
+function playTick(){
+  try{
+    if(!tickAudioCtx) tickAudioCtx=new (window.AudioContext||window.webkitAudioContext)();
+    const o=tickAudioCtx.createOscillator(), g=tickAudioCtx.createGain();
+    o.type='square'; o.frequency.value=1100;
+    g.gain.setValueAtTime(.16,tickAudioCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(.001,tickAudioCtx.currentTime+.055);
+    o.connect(g); g.connect(tickAudioCtx.destination);
+    o.start(); o.stop(tickAudioCtx.currentTime+.06);
+  }catch(e){}
+}
+function playSpinTicks(durationMs){
+  const totalTicks=34;
+  function schedule(i){
+    if(i>=totalTicks || !spinning) return;
+    playTick();
+    const t=i/totalTicks, delay=18+Math.pow(t,2)*170;
+    setTimeout(()=>schedule(i+1),delay);
+  }
+  schedule(0);
+}
+function finishSpin(num,questionText,target){
   if(!spinning) return;
-  spinning=false; wheelRotation=target; lastSpokenIdx=idx;
+  spinning=false; wheelRotation=target; lastSpokenIdx=num-1; pendingReveal=num;
   speakQuestion(questionText,true);
   render();
 }
-function animateSpinTo(idx,total,questionText){
+function animateSpinTo(pos,total,questionText,num){
   spinning=true;
-  const target=computeTargetRotation(idx,total);
-  render(); // draw wheel once at its current (pre-spin) rotation as a stable element
+  const target=computeTargetRotation(pos,total);
+  playSpinTicks(2600);
+  render();
   requestAnimationFrame(()=>{
     const el=document.getElementById('wheelSvg');
-    if(!el){ finishSpin(idx,questionText,target); return; }
+    if(!el){ finishSpin(num,questionText,target); return; }
     el.style.transition='transform 2600ms cubic-bezier(.12,.72,.14,1)';
     el.style.transform=`rotate(${target}deg)`;
-    const onDone=()=>{ el.removeEventListener('transitionend',onDone); finishSpin(idx,questionText,target); };
+    const onDone=()=>{ el.removeEventListener('transitionend',onDone); finishSpin(num,questionText,target); };
     el.addEventListener('transitionend',onDone);
-    setTimeout(()=>{ if(spinning) finishSpin(idx,questionText,target); },2900); // safety fallback
+    setTimeout(()=>{ if(spinning) finishSpin(num,questionText,target); },2900);
   });
 }
 function maybeSpeak(r){
   if(r.status==='question' && r.curIdx!=null && r.curIdx!==lastWheelIdx && !spinning){
     lastWheelIdx=r.curIdx;
-    animateSpinTo(r.curIdx, r.questions.length, r.questions[r.curIdx].q);
+    const num=r.curIdx+1;
+    if(!wheelLayout || !wheelLayout.includes(num)) wheelLayout=computeLayout(r);
+    const pos=wheelLayout.indexOf(num);
+    animateSpinTo(pos<0?0:pos, wheelLayout.length, r.questions[r.curIdx].q, num);
   }
 }
 
@@ -196,7 +229,13 @@ socket.on('state', r=>{ if(state.code && r.code===state.code){ state.room=r; may
 socket.on('connect', ()=>{ if(state.code) subscribe(); });
 
 function hostStart(){ socket.emit('host:start',{code:state.code}); }
-function hostSpin(){ socket.emit('host:spin',{code:state.code}); }
+function hostSpin(){
+  if(spinning) return;
+  pendingReveal=null; // previous round's number disappears exactly now
+  wheelLayout=computeLayout(state.room);
+  render();
+  socket.emit('host:spin',{code:state.code});
+}
 function hostEnd(){ socket.emit('host:end',{code:state.code}); }
 function hostReveal(){ socket.emit('host:reveal',{code:state.code}); }
 function hostNextWinner(){ socket.emit('host:nextWinner',{code:state.code}); }
@@ -285,13 +324,14 @@ function render(){
     <div class="muted">Players Joined</div><div class="code">${Object.keys(r.players).length}${r.maxPlayers?' / '+r.maxPlayers:''}</div>
     <div class="row">${Object.keys(r.players).map(n=>`<span class="pill">${r.players[n].avatar||''} ${esc(n)}${r.players[n].zone?' · '+esc(r.players[n].zone):''}</span>`).join('')||'<span class="muted">કોઈ player joined નથી</span>'}</div>
   </div>`;
+  if(!spinning) wheelLayout=computeLayout(r);
   if(r.status==='lobby') body+=`<div class="card"><button class="btn" onclick="hostStart()">▶ Start Game</button></div>`;
   else if(r.status==='active'||r.status==='locked'){
-    body+=`<div class="card" style="text-align:center">${wheelSVG(r.questions.length,r.usedIdx,wheelRotation)}
+    body+=`<div class="card" style="text-align:center">${wheelSVG(wheelLayout,wheelRotation,pendingReveal)}
     <button class="btn" onclick="hostSpin()" ${spinning?'disabled':''}>🎡 Spin Wheel</button> <button class="btn ghost" onclick="hostEnd()">End Game</button><div class="muted">Used: ${r.usedIdx.length}/${r.questions.length}</div></div>`;
   }
   else if(r.status==='question'){
-    body+=`<div class="card" style="text-align:center">${wheelSVG(r.questions.length,r.usedIdx,wheelRotation)}</div>`;
+    body+=`<div class="card" style="text-align:center">${wheelSVG(wheelLayout,wheelRotation,pendingReveal)}</div>`;
     if(spinning){
       body+=`<div class="card"><div class="qtext">🎡 Spin થઈ રહ્યું છે...</div></div>`;
     } else {
