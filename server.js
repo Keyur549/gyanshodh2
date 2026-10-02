@@ -161,13 +161,23 @@ io.on('connection', (socket) => {
 
   socket.on('host:start', ({code}) => { const r=rooms[code]; if(!r) return; r.status='active'; broadcast(code); });
 
+  const SPIN_MS=2600, REVEAL_MS=1600; // must match the host wheel-animation + number-popup durations
   socket.on('host:spin', ({code}) => {
     const r = rooms[code]; if(!r) return;
+    if(r.status!=='active' && r.status!=='locked') return; // ignore duplicate/racing spin clicks — fixes skipped questions
     const avail=[]; for(let i=0;i<r.questions.length;i++) if(!r.usedIdx.includes(i)) avail.push(i);
     if (avail.length===0){ r.status='ended'; broadcast(code); return; }
     const idx = avail[Math.floor(Math.random()*avail.length)];
-    r.status='question'; r.curIdx=idx; r.usedIdx=[...r.usedIdx, idx]; r.timerEnd=Date.now()+30000;
+    r.status='spinning'; r.curIdx=idx; r.usedIdx=[...r.usedIdx, idx]; r.timerEnd=null;
     broadcast(code);
+    setTimeout(()=>{
+      const rr=rooms[code]; if(!rr||rr.status!=='spinning'||rr.curIdx!==idx) return;
+      rr.status='revealing'; broadcast(code);
+      setTimeout(()=>{
+        const rrr=rooms[code]; if(!rrr||rrr.status!=='revealing'||rrr.curIdx!==idx) return;
+        rrr.status='question'; rrr.timerEnd=Date.now()+30000; broadcast(code);
+      }, REVEAL_MS);
+    }, SPIN_MS);
   });
 
   socket.on('host:end', ({code}) => { const r=rooms[code]; if(!r) return; r.status='ended'; broadcast(code); });
