@@ -38,6 +38,12 @@ ul{padding-left:18px;} .pill{display:inline-block;background:var(--bg);border:1p
 @keyframes sweep{0%{left:-60%;}100%{left:130%;}}
 @keyframes glowPulse{0%,100%{box-shadow:0 0 0 3px rgba(255,215,0,.55),0 0 40px 8px rgba(255,215,0,.32);}50%{box-shadow:0 0 0 3px rgba(255,215,0,.85),0 0 60px 14px rgba(255,215,0,.55);}}
 @keyframes twinkle{0%,100%{opacity:.2;transform:scale(.7) rotate(0deg);}50%{opacity:1;transform:scale(1.25) rotate(20deg);}}
+.winmini{position:relative;border-radius:14px;padding:12px 6px;text-align:center;animation:pop .5s ease-out;
+  box-shadow:0 0 0 2px rgba(255,215,0,.5), 0 0 16px 2px rgba(255,215,0,.3);}
+.winmini .mlbl{font-size:.72rem;font-weight:900;letter-spacing:.5px;text-transform:uppercase;
+  background:linear-gradient(90deg,#fff6c8,#ffd700,#fff6c8);background-size:200% auto;-webkit-background-clip:text;background-clip:text;color:transparent;
+  animation:shimmer 2.4s linear infinite;}
+.winmini .mav{font-size:2rem;margin:4px 0 2px;} .winmini .mnm{font-size:1.1rem;font-weight:800;color:#fff;} .winmini .mzn{font-size:.7rem;color:rgba(255,255,255,.85);}
 .numpop{text-align:center;background:linear-gradient(160deg,#7c3aed,#f59e0b);color:#fff;border-radius:22px;padding:30px 20px;
   box-shadow:0 0 0 3px rgba(255,215,0,.6), 0 0 50px 10px rgba(255,215,0,.4); animation:popBig .45s cubic-bezier(.17,.89,.32,1.49);}
 .numpop .lbl{font-size:1.1rem;font-weight:700;letter-spacing:1px;opacity:.9;text-transform:uppercase;}
@@ -48,6 +54,7 @@ ul{padding-left:18px;} .pill{display:inline-block;background:var(--bg);border:1p
 <body>
 <div class="wrap" id="app">Loading…</div>
 <script src="/socket.io/socket.io.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <script>
 const socket = io();
 const DEFAULT_QA=[
@@ -196,41 +203,41 @@ function playFanfare(){
     });
   }catch(e){}
 }
-let numberPopup=null;
-function finishSpin(num,questionText,target){
-  if(!spinning) return;
-  spinning=false; wheelRotation=target; pendingReveal=num;
-  numberPopup=num;
-  playFanfare();
-  render();
-  setTimeout(()=>{
-    numberPopup=null; lastSpokenIdx=num-1;
-    speakQuestion(questionText,true);
-    render();
-  },1600);
-}
-function animateSpinTo(pos,total,questionText,num){
+let numberPopup=null, lastRevealIdx=null, lastQuestionIdx=null;
+function animateSpinTo(pos,total){
   spinning=true;
   const target=computeTargetRotation(pos,total);
   playSpinTicks(2600);
   render();
   requestAnimationFrame(()=>{
     const el=document.getElementById('wheelSvg');
-    if(!el){ finishSpin(num,questionText,target); return; }
+    const done=()=>{ spinning=false; wheelRotation=target; render(); };
+    if(!el){ done(); return; }
     el.style.transition='transform 2600ms cubic-bezier(.12,.72,.14,1)';
     el.style.transform=`rotate(${target}deg)`;
-    const onDone=()=>{ el.removeEventListener('transitionend',onDone); finishSpin(num,questionText,target); };
+    const onDone=()=>{ el.removeEventListener('transitionend',onDone); done(); };
     el.addEventListener('transitionend',onDone);
-    setTimeout(()=>{ if(spinning) finishSpin(num,questionText,target); },2900);
+    setTimeout(()=>{ if(spinning) done(); },2900);
   });
 }
-function maybeSpeak(r){
-  if(r.status==='question' && r.curIdx!=null && r.curIdx!==lastWheelIdx && !spinning){
+// Server drives three synced phases: 'spinning' (wheel turns) -> 'revealing' (big number popup) -> 'question' (full question+timer).
+// Every connected client (host and all players) reacts to the SAME broadcast, so timing always matches exactly.
+function maybeAnimate(r){
+  if(r.status==='spinning' && r.curIdx!=null && r.curIdx!==lastWheelIdx){
     lastWheelIdx=r.curIdx;
-    const num=r.curIdx+1;
-    if(!wheelLayout || !wheelLayout.includes(num)) wheelLayout=computeLayout(r);
-    const pos=wheelLayout.indexOf(num);
-    animateSpinTo(pos<0?0:pos, wheelLayout.length, r.questions[r.curIdx].q, num);
+    pendingReveal=null; // previous round's number disappears exactly now
+    wheelLayout=computeLayout(r);
+    const num=r.curIdx+1, pos=wheelLayout.indexOf(num);
+    animateSpinTo(pos<0?0:pos, wheelLayout.length);
+  }
+  if(r.status==='revealing' && r.curIdx!=null && r.curIdx!==lastRevealIdx){
+    lastRevealIdx=r.curIdx;
+    pendingReveal=r.curIdx+1; numberPopup=r.curIdx+1;
+    playFanfare(); render();
+  }
+  if(r.status==='question' && r.curIdx!=null && r.curIdx!==lastQuestionIdx){
+    lastQuestionIdx=r.curIdx; numberPopup=null; lastSpokenIdx=r.curIdx;
+    speakQuestion(r.questions[r.curIdx].q, true); render();
   }
 }
 
@@ -253,17 +260,11 @@ function uiCreateRoom(){
 function subscribe(){
   socket.emit('subscribe',{code:state.code},(res)=>{ if(res.ok){ state.room=res.room; render(); } });
 }
-socket.on('state', r=>{ if(state.code && r.code===state.code){ state.room=r; maybeSpeak(r); if(!spinning) render(); } });
+socket.on('state', r=>{ if(state.code && r.code===state.code){ state.room=r; maybeAnimate(r); if(!spinning) render(); } });
 socket.on('connect', ()=>{ if(state.code) subscribe(); });
 
 function hostStart(){ socket.emit('host:start',{code:state.code}); }
-function hostSpin(){
-  if(spinning) return;
-  pendingReveal=null; // previous round's number disappears exactly now
-  wheelLayout=computeLayout(state.room);
-  render();
-  socket.emit('host:spin',{code:state.code});
-}
+function hostSpin(){ if(spinning) return; socket.emit('host:spin',{code:state.code}); }
 function hostEnd(){ socket.emit('host:end',{code:state.code}); }
 function hostReveal(){ socket.emit('host:reveal',{code:state.code}); }
 function hostNextWinner(){ socket.emit('host:nextWinner',{code:state.code}); }
@@ -274,16 +275,50 @@ async function sharePlayerLink(){
   if(navigator.share){ try{ await navigator.share({title:'જ્ઞાન શોધ Quiz',text,url}); return; }catch(e){} }
   try{ await navigator.clipboard.writeText(url); alert('Player Link copy થયો:\n'+url); }catch(e){ prompt('Player Link:',url); }
 }
-function downloadCSV(){
+async function downloadExcel(){
   const r=state.room; const w=r.winners||{};
-  let rows=[['Player','Zone','Correct','Wrong','Lines','FullHouse','Bonus']];
-  for(const [name,p] of Object.entries(r.players)){
+  const rows=Object.entries(r.players).map(([name,p])=>{
     const res=playerResults(r,name);
-    rows.push([name,p.zone||'',res.correctCount,res.cellState.filter(s=>s==='red').length,res.correctRows,res.fullHouse?'yes':'no',w.bonus===name?'yes':'no']);
-  }
-  const csv=rows.map(row=>row.map(x=>String(x).replace(/,/g,';')).join(',')).join('\n');
-  const blob=new Blob([csv],{type:'text/csv'}); const a=document.createElement('a');
-  a.href=URL.createObjectURL(blob); a.download='quiz-report-'+r.code+'.csv'; a.click();
+    let validLines=0, invalidLines=0;
+    Object.keys(p.claims||{}).forEach(k=>{
+      if(k==='full'||k==='bonus') return;
+      const need=+k.replace('line','');
+      if(res.correctRows>=need) validLines++; else invalidLines++;
+    });
+    return {name, zone:p.zone||'', avatar:p.avatar||'', correct:res.correctCount,
+      wrong:res.cellState.filter(s=>s==='red').length, validLines, invalidLines,
+      fullHouse:res.fullHouse?'Yes':'No', bonus:w.bonus===name?'Yes':'No'};
+  }).sort((a,b)=>b.correct-a.correct || a.wrong-b.wrong);
+
+  const wb=new ExcelJS.Workbook();
+  const ws=wb.addWorksheet('Results');
+  ws.columns=[
+    {header:'Rank',key:'rank',width:7},{header:'Player',key:'name',width:20},{header:'Zone',key:'zone',width:16},
+    {header:'Avatar',key:'avatar',width:8},{header:'Correct',key:'correct',width:10},{header:'Wrong',key:'wrong',width:10},
+    {header:'Valid Lines',key:'validLines',width:12},{header:'Invalid Lines',key:'invalidLines',width:13},
+    {header:'Full House',key:'fullHouse',width:12},{header:'Bonus Winner',key:'bonus',width:13},
+  ];
+  ws.getRow(1).eachCell(c=>{ c.font={bold:true,color:{argb:'FFFFFFFF'},size:12}; c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF7C3AED'}}; c.alignment={horizontal:'center',vertical:'middle'}; });
+  ws.getRow(1).height=20;
+  rows.forEach((r2,i)=>{
+    const row=ws.addRow({rank:i+1, ...r2});
+    row.alignment={horizontal:'center',vertical:'middle'};
+    row.getCell('name').alignment={horizontal:'left',vertical:'middle'};
+    row.getCell('correct').font={color:{argb:'FF0B7A2E'},bold:true};
+    row.getCell('correct').fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFD4F4DD'}};
+    row.getCell('wrong').font={color:{argb:'FFB91C1C'},bold:true};
+    row.getCell('wrong').fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFFBD5D5'}};
+    row.getCell('validLines').fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFD4F4DD'}};
+    row.getCell('invalidLines').fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFFBD5D5'}};
+    if(r2.fullHouse==='Yes'){ row.getCell('fullHouse').fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFFFD700'}}; row.getCell('fullHouse').font={bold:true}; }
+    if(r2.bonus==='Yes'){ row.getCell('bonus').fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFFFD700'}}; row.getCell('bonus').font={bold:true}; }
+    if(i<3){ row.getCell('rank').font={bold:true,size:13}; row.getCell('rank').fill={type:'pattern',pattern:'solid',fgColor:{argb:['FFFFD700','FFC0C0C0','FFCD7F32'][i]}}; }
+  });
+  ws.autoFilter={from:'A1',to:'J1'};
+  ws.views=[{state:'frozen',ySplit:1}];
+  const buf=await wb.xlsx.writeBuffer();
+  const blob=new Blob([buf],{type:'application/octet-stream'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='quiz-report-'+r.code+'.xlsx'; a.click();
 }
 function playerResults(r,pname){
   const p=r.players[pname]; const cellState=Array(25).fill('none');
@@ -311,11 +346,11 @@ function winnerBannerHTML(r){
   }
   if(step>WINNER_ORDER.length){
     const colors=['#7c3aed','#f59e0b','#16a34a','#0ea5e9','#e11d48','#9333ea','#eab308'];
-    return `<div class="card"><h2 style="text-align:center">🏆 બધા Winners</h2><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+    return `<div class="card"><div class="fireworks">🎆🎉🎇👑🎊</div><h2 style="text-align:center">🏆 બધા Winners</h2><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
     ${WINNER_ORDER.map((k,i)=>{const name=w[k]; const pd=name?r.players[name]:null;
-      return `<div style="background:${colors[i%colors.length]};color:#fff;border-radius:12px;padding:10px;text-align:center">
-      <div style="font-size:.75rem;font-weight:700">${esc(WINNER_LABELS[k])}</div><div style="font-size:1.8rem">${pd?pd.avatar:'❓'}</div>
-      <div style="font-size:1.05rem;font-weight:800">${name?esc(name):'—'}</div><div style="font-size:.75rem">${pd&&pd.zone?esc(pd.zone):''}</div></div>`;
+      return `<div class="winmini" style="background:${colors[i%colors.length]}">
+      <div class="mlbl">${esc(WINNER_LABELS[k])}</div><div class="mav">${pd?pd.avatar:'❓'}</div>
+      <div class="mnm">${name?esc(name):'—'}</div><div class="mzn">${pd&&pd.zone?esc(pd.zone):''}</div></div>`;
     }).join('')}</div></div>`;
   }
   return '';
@@ -358,19 +393,21 @@ function render(){
     body+=`<div class="card" style="text-align:center">${wheelSVG(wheelLayout,wheelRotation,pendingReveal)}
     <button class="btn" onclick="hostSpin()" ${spinning?'disabled':''}>🎡 Spin Wheel</button> <button class="btn ghost" onclick="hostEnd()">End Game</button><div class="muted">Used: ${r.usedIdx.length}/${r.questions.length}</div></div>`;
   }
+  else if(r.status==='spinning'){
+    body+=`<div class="card" style="text-align:center">${wheelSVG(wheelLayout,wheelRotation,pendingReveal)}
+    <div class="qtext">🎡 Spin થઈ રહ્યું છે...</div></div>`;
+  }
+  else if(r.status==='revealing'){
+    body+=`<div class="card" style="text-align:center">${wheelSVG(wheelLayout,wheelRotation,pendingReveal)}</div>`;
+    body+=`<div class="card numpop"><div class="lbl">🎯 Question Number</div><div class="num">${numberPopup!=null?numberPopup:(r.curIdx+1)}</div></div>`;
+  }
   else if(r.status==='question'){
     body+=`<div class="card" style="text-align:center">${wheelSVG(wheelLayout,wheelRotation,pendingReveal)}</div>`;
-    if(numberPopup){
-      body+=`<div class="card numpop"><div class="lbl">🎯 Question Number</div><div class="num">${numberPopup}</div></div>`;
-    } else if(spinning){
-      body+=`<div class="card"><div class="qtext">🎡 Spin થઈ રહ્યું છે...</div></div>`;
-    } else {
-      const remain=Math.max(0,Math.ceil((r.timerEnd-Date.now())/1000));
-      body+=`<div class="card"><div class="qtext">${esc(r.questions[r.curIdx].q)}</div><div class="timer">${remain}s</div>
-      <button class="btn secondary" onclick='speakQuestion(${JSON.stringify(r.questions[r.curIdx].q)},true)'>🔊 સાંભળો</button>
-      <button class="btn ghost" onclick="toggleAudio()">${audioOn?'🔊 Auto On':'🔇 Auto Off'}</button>
-      <button class="btn ghost" onclick="hostEnd()">End Game</button></div>`;
-    }
+    const remain=Math.max(0,Math.ceil((r.timerEnd-Date.now())/1000));
+    body+=`<div class="card"><div class="qtext">${esc(r.questions[r.curIdx].q)}</div><div class="timer">${remain}s</div>
+    <button class="btn secondary" onclick='speakQuestion(${JSON.stringify(r.questions[r.curIdx].q)},true)'>🔊 સાંભળો</button>
+    <button class="btn ghost" onclick="toggleAudio()">${audioOn?'🔊 Auto On':'🔇 Auto Off'}</button>
+    <button class="btn ghost" onclick="hostEnd()">End Game</button></div>`;
   } else if(r.status==='ended') body+=`<div class="card"><button class="btn" onclick="hostReveal()">🏆 Reveal Results</button></div>`;
   if(r.status!=='revealed'){
     const claims=[]; for(const [n,p] of Object.entries(r.players)) for(const t of Object.keys(p.claims||{})) claims.push(n+' — '+t);
@@ -380,7 +417,7 @@ function render(){
     const step=r.revealStep||0;
     body+=winnerBannerHTML(r);
     body+=`<div class="card">${step<=WINNER_ORDER.length?`<button class="btn" onclick="hostNextWinner()">▶ Next Winner Reveal કરો</button>`:'<div class="muted">બધા Winners reveal થઈ ગયા 🎉</div>'}
-    <button class="btn secondary" onclick="downloadCSV()">⬇ CSV Report</button></div>`;
+    <button class="btn secondary" onclick="downloadExcel()">⬇ Excel Report (.xlsx)</button></div>`;
     body+=`<div class="card overflow"><h2>Player Results</h2><table style="width:100%;font-size:.8rem;border-collapse:collapse">
     <tr><th align="left">Player</th><th>Correct</th><th>Wrong</th><th>Lines</th><th>Full</th></tr>
     ${Object.keys(r.players).map(n=>{const res=playerResults(r,n);const w2=res.cellState.filter(s=>s==='red').length;
