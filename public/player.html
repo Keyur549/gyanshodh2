@@ -41,6 +41,17 @@ input,select{width:100%;padding:9px;border-radius:8px;border:1px solid var(--lin
 @keyframes sweep{0%{left:-60%;}100%{left:130%;}}
 @keyframes glowPulse{0%,100%{box-shadow:0 0 0 3px rgba(255,215,0,.55),0 0 40px 8px rgba(255,215,0,.32);}50%{box-shadow:0 0 0 3px rgba(255,215,0,.85),0 0 60px 14px rgba(255,215,0,.55);}}
 @keyframes twinkle{0%,100%{opacity:.2;transform:scale(.7) rotate(0deg);}50%{opacity:1;transform:scale(1.25) rotate(20deg);}}
+.winmini{position:relative;border-radius:14px;padding:12px 6px;text-align:center;animation:pop .5s ease-out;
+  box-shadow:0 0 0 2px rgba(255,215,0,.5), 0 0 16px 2px rgba(255,215,0,.3);}
+.winmini .mlbl{font-size:.72rem;font-weight:900;letter-spacing:.5px;text-transform:uppercase;
+  background:linear-gradient(90deg,#fff6c8,#ffd700,#fff6c8);background-size:200% auto;-webkit-background-clip:text;background-clip:text;color:transparent;
+  animation:shimmer 2.4s linear infinite;}
+.winmini .mav{font-size:2rem;margin:4px 0 2px;} .winmini .mnm{font-size:1.1rem;font-weight:800;color:#fff;} .winmini .mzn{font-size:.7rem;color:rgba(255,255,255,.85);}
+.numpop{text-align:center;background:linear-gradient(160deg,#7c3aed,#f59e0b);color:#fff;border-radius:22px;padding:30px 20px;
+  box-shadow:0 0 0 3px rgba(255,215,0,.6), 0 0 50px 10px rgba(255,215,0,.4); animation:popBig .45s cubic-bezier(.17,.89,.32,1.49);}
+.numpop .lbl{font-size:1.1rem;font-weight:700;letter-spacing:1px;opacity:.9;text-transform:uppercase;}
+.numpop .num{font-size:5rem;font-weight:900;line-height:1.1;text-shadow:0 0 24px rgba(255,255,255,.6);}
+@keyframes popBig{0%{transform:scale(.3);opacity:0;}70%{transform:scale(1.12);opacity:1;}100%{transform:scale(1);}}
 </style>
 </head>
 <body>
@@ -133,11 +144,11 @@ function winnerBannerHTML(r){
   }
   if(step>WINNER_ORDER.length){
     const colors=['#7c3aed','#f59e0b','#16a34a','#0ea5e9','#e11d48','#9333ea','#eab308'];
-    return `<div class="card"><h2 style="text-align:center">🏆 બધા Winners</h2><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+    return `<div class="card"><div class="fireworks">🎆🎉🎇👑🎊</div><h2 style="text-align:center">🏆 બધા Winners</h2><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
     ${WINNER_ORDER.map((k,i)=>{const name=w[k]; const pd=name?r.players[name]:null;
-      return `<div style="background:${colors[i%colors.length]};color:#fff;border-radius:12px;padding:10px;text-align:center">
-      <div style="font-size:.75rem;font-weight:700">${esc(WINNER_LABELS[k])}</div><div style="font-size:1.8rem">${pd?pd.avatar:'❓'}</div>
-      <div style="font-size:1.05rem;font-weight:800">${name?esc(name):'—'}</div><div style="font-size:.75rem">${pd&&pd.zone?esc(pd.zone):''}</div></div>`;
+      return `<div class="winmini" style="background:${colors[i%colors.length]}">
+      <div class="mlbl">${esc(WINNER_LABELS[k])}</div><div class="mav">${pd?pd.avatar:'❓'}</div>
+      <div class="mnm">${name?esc(name):'—'}</div><div class="mzn">${pd&&pd.zone?esc(pd.zone):''}</div></div>`;
     }).join('')}</div></div>`;
   }
   return '';
@@ -163,6 +174,8 @@ function render(){
   if(!p){ el.innerHTML='<div class="card">Card તૈયાર થઈ રહ્યું છે…</div>'; return; }
   let body=`<h1>🎴 ${esc(state.name)}</h1><div class="muted">Room: ${esc(r.code)} — તમારું Player ID: <b>${esc(state.name)}</b></div>`;
   if(r.status==='lobby'||r.status==='active') body+=`<div class="card">Host ની રાહ જુઓ…</div>`;
+  if(r.status==='spinning') body+=`<div class="card"><div class="qtext">🎡 Host Wheel Spin કરી રહ્યા છે...</div></div>`;
+  if(r.status==='revealing') body+=`<div class="card numpop"><div class="lbl">🎯 Question Number</div><div class="num">${r.curIdx+1}</div></div>`;
   if(r.status==='question'){
     const remain=Math.max(0,Math.ceil((r.timerEnd-Date.now())/1000));
     body+=`<div class="card"><div class="qtext">${esc(r.questions[r.curIdx].q)}</div><div class="timer">${remain}s</div>
